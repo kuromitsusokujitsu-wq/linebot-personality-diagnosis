@@ -139,6 +139,9 @@ class SessionManager:
 def call_openai_api(prompt: str, max_tokens: int = 200) -> str:
     """OpenAI APIを呼び出す"""
     try:
+        from openai import OpenAI
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        
         response = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[
