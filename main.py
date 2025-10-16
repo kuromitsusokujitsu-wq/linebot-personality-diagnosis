@@ -118,7 +118,7 @@ def call_openai_api(prompt: str, max_tokens: int = 200) -> str:
         client = openai.OpenAI(api_key=OPENAI_API_KEY)
         
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-3.5-turbo,
             messages=[
                 {"role": "user", "content": prompt}
             ],
@@ -128,6 +128,8 @@ def call_openai_api(prompt: str, max_tokens: int = 200) -> str:
         return response.choices[0].message.content.strip()
     except Exception as e:
         logger.error(f"OpenAI API Error: {e}")
+        # シンプルなフォールバック
+        return "🔍 興味深い回答ですね。あなたらしさが表れていると感じます。"
 
 def mini_feedback(answers: List[str], just_answered_index: int) -> str:
     """ミニ所見を生成"""
