@@ -2,17 +2,12 @@ from fastapi import FastAPI, Request, HTTPException
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
+import openai
 import os
-import logging
-from typing import Dict, List, Optional
+import json
+import uvicorn
 
-# ログ設定
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-app = FastAPI()
-
-# 環境変数から設定を読み込み
+# 環境変数（実際のデプロイ時に設定）
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN')
 LINE_CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -21,301 +16,403 @@ OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
-# 質問データ
-QUESTIONS = [
-    {
-        "id": 1,
-        "text": "最近、「自分らしい」と思えた出来事を教えてください。",
-        "example": "例：自分のアイデアが採用されたとき、友達を笑わせられたとき、自然の中で心が落ち着いたとき…など。"
+# OpenAI APIの初期化
+openai.api_key = OPENAI_API_KEY
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
+
+app = FastAPI()
+
+# ユーザーの回答を保存するための辞書
+user_responses = {}
+
+# 革新的10問の質問設計
+QUESTIONS = {
+    1: {
+        "question": "🤔 **質問1/10【認知構造】**\n\n最近、重要な決断をした体験について、その時の思考プロセスを具体的に教えてください。何を考え、何を重視し、最終的にどう判断したかを詳しく。",
+        "example": "📝 **記入例**\n先月、転職するかどうかで悩んでいました。まず現在の仕事の不満点をリストアップし、転職先の条件と比較しました。でも最終的な決め手は「直感的にワクワクするか」でした。論理的に考えても、最後は感情が動かないと決断できないタイプだと気づきました...\n\n💡 **ポイント**: 具体的な状況・思考プロセス・判断基準・振り返りを詳しく！"
     },
-    {
-        "id": 2,
-        "text": "思ったようにいかなかった体験と、そこから気づいたことはありますか？",
-        "example": "例：仕事でミスをした、人間関係で気まずくなった、挑戦したけど結果が出なかった…など。「そのとき、なぜそうなったと思うか？」まで教えてください。"
+    2: {
+        "question": "📚 **質問2/10【認知構造】**\n\n新しいことを学ぶとき、どんなアプローチを取りますか？学習方法、動機、継続の仕方について、あなたなりのやり方を教えてください。",
+        "example": "📝 **記入例**\n興味を持った分野は、まずYouTubeで概要を掴んでから本を読みます。一人で黙々とやるより、同じ興味を持つ人とディスカッションする方が理解が深まります。完璧を求めすぎて挫折することが多いので、最近は「まず60%の理解で良し」と割り切るようにしています...\n\n💡 **ポイント**: 学習スタイル・モチベーション・継続のコツを具体的に！"
     },
-    {
-        "id": 3,
-        "text": "周囲の人から「すごいね」「助かった」と言われることはどんなことですか？",
-        "example": "例：聞き上手と言われる、整理が得意、いつも前向き、細かいことに気づく…など。"
+    3: {
+        "question": "😰 **質問3/10【感情構造】**\n\nストレスや困難な状況に直面したとき、どんな感情が湧き、どう対処していますか？最近の具体的な経験も含めて教えてください。",
+        "example": "📝 **記入例**\n仕事でトラブルが起きると、まず「なんで私が...」という怒りが湧きます。でもその後すぐに「どうしよう」という不安に変わります。対処法としては、一旦深呼吸して問題を紙に書き出し、優先順位をつけて一つずつ解決していきます。友人に愚痴を聞いてもらうのも大切なプロセスです...\n\n💡 **ポイント**: 感情の変化・対処方法・具体的なエピソードを詳しく！"
     },
-    {
-        "id": 4,
-        "text": "グループで動くとき、自然とどんな役割をしていることが多いですか？",
-        "example": "例：まとめ役、聞き役、盛り上げ役、裏方で支えるタイプ、静かに観察して意見を出す…など。"
+    4: {
+        "question": "✨ **質問4/10【感情構造】**\n\nあなたが最も充実感や喜びを感じる瞬間について教えてください。それはなぜそう感じるのか、理由も含めて。",
+        "example": "📝 **記入例**\n後輩に仕事を教えて、その人が「わかりました！」と目を輝かせる瞬間が最高に嬉しいです。自分の知識や経験が誰かの役に立っている実感と、相手の成長を間近で見られる特別感があります。一人で何かを達成するより、誰かと一緒に成長できる体験の方に深い喜びを感じます...\n\n💡 **ポイント**: 具体的なシーン・なぜ嬉しいのか・価値観との関係を詳しく！"
     },
-    {
-        "id": 5,
-        "text": "最近、感情が大きく動いた出来事を一つ教えてください。",
-        "example": "例：嬉しくて泣いた、腹が立った、感動した、不安だった、安心した…など。そのとき、どうやって気持ちを落ち着けましたか？"
+    5: {
+        "question": "👥 **質問5/10【行動構造】**\n\n人間関係で困った経験について、その時の状況と、あなたがとった行動、そしてその行動を選んだ理由を教えてください。",
+        "example": "📝 **記入例**\n同僚との意見対立で職場の雰囲気が悪くなった時、私は直接話し合いを提案しました。周りは「触らぬ神に祟りなし」という感じでしたが、このままだと皆が気を遣い続けることになると思ったからです。結果的に誤解が解けて関係が改善しました。対立を避けるより、建設的に解決したい性格だと思います...\n\n💡 **ポイント**: 具体的な状況・とった行動・選択理由・結果への考察を詳しく！"
     },
-    {
-        "id": 6,
-        "text": "物事を決めるとき、どちらの傾向が強いですか？",
-        "example": "例：「直感でピンときたら動く」「理由を整理してから動く」どちらも当てはまる場合は、その割合を感覚で教えてください（例：直感6割・理屈4割）。"
+    6: {
+        "question": "🎯 **質問6/10【価値観構造】**\n\nあなたが「これだけは譲れない」と思うことは何ですか？それはなぜ大切で、どんな経験からそう思うようになったかも教えてください。",
+        "example": "📝 **記入例**\n「人を裏切らない」ことは絶対に譲れません。学生時代に親友だと思っていた人に陰で悪口を言われていたことがあり、信頼関係の大切さを痛感しました。それ以来、小さな約束でも必ず守るし、人の秘密は絶対に漏らしません。信頼は築くのに時間がかかるけど、失うのは一瞬だと学びました...\n\n💡 **ポイント**: 譲れないこと・大切な理由・形成された経験を詳しく！"
     },
-    {
-        "id": 7,
-        "text": "心身が疲れたとき、どうやって回復していますか？",
-        "example": "例：寝る・自然の中に行く・お風呂に浸かる・好きな人に会う・一人になる・音楽を聴く…など。"
+    7: {
+        "question": "🌟 **質問7/10【価値観構造】**\n\n人生で最も大切にしたい価値観や生き方について教えてください。理想的な人生とはどんなものか、あなたの考えを聞かせてください。",
+        "example": "📝 **記入例**\n「自分らしく、でも人の役に立つ」生き方を大切にしたいです。無理して他人に合わせるのではなく、自分の特性を活かして社会貢献できる人生が理想です。派手な成功より、身近な人から「ありがとう」と言われる機会の多い人生の方が価値があると思います。バランスを取りながら、充実感のある毎日を送りたいです...\n\n💡 **ポイント**: 大切な価値観・理想の人生像・なぜそう思うのかを詳しく！"
     },
-    {
-        "id": 8,
-        "text": "あなたが大切にしている価値は何ですか？",
-        "example": "例：自由・信頼・挑戦・愛・誠実・安定・成長・感謝…など、直感で選んでください。"
+    8: {
+        "question": "🚀 **質問8/10【自己物語】**\n\n5年後、どんな自分になっていたいですか？その理想の自分になるために、今何を大切にしていますか？",
+        "example": "📝 **記入例**\n5年後は、専門分野で一定の地位を築きつつ、後輩の育成にも力を入れている自分でいたいです。今は技術スキルの向上はもちろん、人とのコミュニケーション能力も意識的に鍛えています。理想の自分になるには、目の前のことを丁寧にやりつつ、長期的な視点も持ち続けることが大切だと思っています...\n\n💡 **ポイント**: 具体的な理想像・そのための現在の取り組み・成長への考えを詳しく！"
     },
-    {
-        "id": 9,
-        "text": "子どもの頃から変わっていない「好きなこと・苦手なこと」は？",
-        "example": "例：好き→絵を描く、探検、考えること／苦手→争うこと、大人数、計算など。"
+    9: {
+        "question": "⏰ **質問9/10【時間軸構造】**\n\n過去の自分と比べて、今いちばん変わったと思う点は？その変化をどう捉えていますか？",
+        "example": "📝 **記入例**\n学生時代は人の目ばかり気にしていましたが、今は自分の価値観を大切にするようになりました。特に30歳を過ぎてから「他人の期待に応える人生」から「自分らしい人生」にシフトチェンジした感覚があります。この変化は良いことだと思っていて、もっと自分軸を大切にしていきたいです...\n\n💡 **ポイント**: 具体的な変化・いつからか・変化への評価・きっかけを詳しく！"
     },
-    {
-        "id": 10,
-        "text": "最近の学びや発見で、「世界の見え方」が変わったことはありますか？",
-        "example": "例：本や動画で感動したこと、人の言葉でハッとしたこと、体験を通じて気づいたこと…など。"
-    },
-    {
-        "id": 11,
-        "text": "これからの「理想の1日」を、少しだけ想像して教えてください。",
-        "example": "例：朝はカフェでゆっくり仕事、午後は海辺を散歩、夜は家族や仲間と語らう…など。"
-    },
-    {
-        "id": 12,
-        "text": "1年後のあなたが、今のあなたに手紙を書くとしたら何と言いますか？",
-        "example": "例：「焦らなくて大丈夫」「あの挑戦、続けて正解だった」「もう少し休んでいいよ」など。"
+    10: {
+        "question": "👨‍👩‍👧‍👦 **質問10/10【他者視点構造】**\n\n親しい友人があなたを他の人に紹介するとき、何と言うと思いますか？また、それは自分が思う自分の特徴と同じですか？",
+        "example": "📝 **記入例**\n友人は「彼女は一見おとなしそうだけど、実はすごく芯が強くて、困った時に頼りになる人」と言うと思います。私自身は「優柔不断で心配性」だと思っているので、友人の方が私を強く見てくれているのかもしれません。実際、相談される機会は多いので、案外当たっているかも...\n\n💡 **ポイント**: 友人の紹介予想・自己認識との違い・その考察を詳しく！"
     }
-]
+}
 
-# インメモリセッション管理
-sessions: Dict[str, Dict] = {}
-
-class SessionManager:
-    @staticmethod
-    def get_session(user_id: str) -> Optional[Dict]:
-        return sessions.get(user_id)
-    
-    @staticmethod
-    def create_session(user_id: str):
-        sessions[user_id] = {
-            "index": 0,
-            "answers": []
-        }
-    
-    @staticmethod
-    def update_session(user_id: str, index: int, answers: List[str]):
-        if user_id in sessions:
-            sessions[user_id]["index"] = index
-            sessions[user_id]["answers"] = answers
-    
-    @staticmethod
-    def clear_session(user_id: str):
-        if user_id in sessions:
-            del sessions[user_id]
-
-def call_openai_api(prompt: str, max_tokens: int = 200) -> str:
-    """OpenAI APIを呼び出す"""
-    try:
-        import openai
-        client = openai.OpenAI(api_key=OPENAI_API_KEY)
-        
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "あなたは心理学とパーソナリティ分析の専門家です。深い洞察力で人の内面を見抜き、温かく支援的なアドバイスを提供します。"},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=max_tokens,
-            temperature=0.8
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"OpenAI API Error: {e}")
-        return "🔍 興味深い回答ですね。あなたらしさが表れていると感じます。"
-
-def mini_feedback(answers: List[str], just_answered_index: int) -> str:
-    """ミニ所見を生成"""
-    prompt = f"""心理学専門家として、この回答から見える深層心理を分析してください。
-
-【分析指針】
-- 表面的な要約ではなく、心理的パターンを読み取る
-- 行動の背景にある価値観や動機を推察する
-- 温かく洞察力のある所見にする（150字以内）
-
-【質問】{QUESTIONS[just_answered_index]['text']}
-【回答】{answers[just_answered_index]}
-
-この回答から見える心理的特徴を1つの所見として述べてください。"""
-    
-    return call_openai_api(prompt, 200)
-
-def final_diagnosis(answers: List[str]) -> str:
-    """最終診断を生成"""
-    
-    # 回答を整理
-    answers_text = ""
-    for i in range(len(answers)):
-        answers_text += f"Q{i+1}: {QUESTIONS[i]['text']}\n回答: {answers[i]}\n\n"
-    
-    # 強化されたプロンプト
-    prompt = f"""あなたは臨床心理学者です。以下の12の質問への回答を深層心理学的に分析し、その人の本質的な性格構造を解明してください。
-
-【重要】以下のフォーマットを厳密に守って出力してください：
-
-{answers_text}
-
-【分析要求】
-1. 回答の要約ではなく、深層心理の分析を行う
-2. 行動パターンから内面の動機構造を読み取る
-3. 潜在的な強みと課題を心理学的に解釈する
-4. 実用的で具体的なアドバイスを提供する
-
-【必須出力フォーマット】
-## 🎭 「[12-20文字の診断タイプ名]」
-
-### 💫 あなたの思考構造
-[認知パターンと情報処理の特徴を2-3文で]
-
-### 💝 感情のクセ
-[感情の動きや感情調節の傾向を2-3文で]
-
-### 🌟 価値観の核
-[最も大切にしている根本的価値観を2-3文で]
-
-### 📖 物語の型
-[人生への取り組み方や成長パターンを2-3文で]
-
-### 💪 強みTop3
-1. [具体的な強み1]
-2. [具体的な強み2]
-3. [具体的な強み3]
-
-### ⚠️ 注意点Top3
-1. [具体的な注意点1]
-2. [具体的な注意点2]
-3. [具体的な注意点3]
-
-### 💡 活かし方ガイド
-
-#### 🧩 仕事での活かし方
-[2-3文の具体的アドバイス]
-
-#### 💞 恋愛での活かし方
-[2-3文の具体的アドバイス]
-
-#### 🧑‍🤝‍🧑 対人関係での活かし方
-[2-3文の具体的アドバイス]
-
-### 📋 今週の処方箋
-1. [具体的行動1]
-2. [具体的行動2]
-3. [具体的行動3]
-
-このフォーマットを必ず守り、心理学的洞察に基づいた深い分析を行ってください。"""
-    
-    result = call_openai_api(prompt, 2500)
-    
-    # フォールバック診断の改善
-    if "🔍 興味深い回答ですね" in result:
-        return get_enhanced_fallback_diagnosis()
-    
-    return result
-
-def get_enhanced_fallback_diagnosis():
-    """改善されたフォールバック診断"""
-    return """## 🎭 「内省する成長探求者タイプ」
-
-### 💫 あなたの思考構造
-物事を多角的に捉え、表面的な答えに満足せず本質を探ろうとする深い思考パターンをお持ちです。経験から学び取る能力が高く、常に成長への道筋を見出そうとする意識的な思考プロセスが特徴的です。
-
-### 💝 感情のクセ
-感情を大切にしながらも冷静に観察し、感情に流されすぎないよう調整する術を身につけています。内面の微細な変化にも敏感で、自分の心の動きを客観視する高いメタ認知能力をお持ちです。
-
-### 🌟 価値観の核
-真の成長と自己実現を最重要視し、他者との調和を保ちながらも自分らしさを失わない生き方を追求しています。誠実さと向上心が価値観の根幹にあり、人生を意味のあるものにしたいという強い欲求があります。
-
-### 📖 物語の型
-継続的な自己改善を軸とした成長ストーリーを描いています。挫折や困難も学習機会として捉え、螺旋状に成長していく力強さがあります。自分なりのペースで着実に前進する姿勢が一貫しています。
-
-### 💪 強みTop3
-1. 深い自己理解力と内省的思考能力
-2. 経験を学びに変換する高い学習意欲
-3. 他者への共感性と建設的なバランス感覚
-
-### ⚠️ 注意点Top3
-1. 完璧主義的傾向で自分を追い込みやすい
-2. 考えすぎて行動のタイミングを逃しがち
-3. 他者の期待に敏感で自分の軸がブレることがある
-
-### 💡 活かし方ガイド
-
-#### 🧩 仕事での活かし方
-あなたの深い分析力と継続的改善マインドは、長期的プロジェクトや戦略立案で威力を発揮します。急がず質を重視できる環境で、持ち前の洞察力を活かしてください。
-
-#### 💞 恋愛での活かし方
-相手を理解しようとする真摯な姿勢と成長志向は、深い信頼関係の基盤となります。お互いを高め合える関係性を築き、ゆっくりと絆を深めていくアプローチが最適です。
-
-#### 🧑‍🤝‍🧑 対人関係での活かし方
-優れた傾聴力と共感性を活かし、人の相談に乗る役割で信頼を築けます。自分らしさを大切にしながら、自然体で人と関わることで真の魅力が伝わります。
-
-### 📋 今週の処方箋
-1. 1日20分の振り返りタイムを設けて思考と行動のバランスを取る
-2. 小さな達成を積み重ね、完璧主義の罠を回避する
-3. 自分の感情を受け入れる「セルフ・コンパッション」の時間を持つ"""
-
-@app.get("/")
-async def root():
-    return {"message": "LINEbot Personality Diagnosis is running!"}
-
-@app.post("/callback")
-async def callback(request: Request):
-    signature = request.headers['X-Line-Signature']
+@app.post("/webhook")
+async def webhook(request: Request):
+    signature = request.headers.get('X-Line-Signature', '')
     body = await request.body()
     
     try:
-        handler.handle(body.decode(), signature)
+        handler.handle(body.decode('utf-8'), signature)
     except InvalidSignatureError:
-        logger.error("Invalid signature")
         raise HTTPException(status_code=400, detail="Invalid signature")
     
-    return 'OK'
+    return {"status": "ok"}
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_id = event.source.user_id
-    text = event.message.text.strip()
+    user_message = event.message.text.strip()
     
-    session = SessionManager.get_session(user_id)
+    # ユーザーデータの初期化
+    if user_id not in user_responses:
+        user_responses[user_id] = {
+            "current_question": 0,
+            "answers": {},
+            "completed": False
+        }
     
-    if not session:
-        if text in ["診断開始", "開始", "はじめ", "スタート", "診断", "start"]:
-            reply_text = "🔍 次世代性格診断AI へようこそ！\n\n12問の質問で、あなたの思考構造・感情パターン・価値観を多角的に分析します。\n各回答後にミニ所見をお返しし、最後に詳細なパーソナリティレポートを作成します。\n\n個人を特定する情報は不要です。\n準備ができましたら「はい」と送ってください。"
-        elif text in ["はい", "ok", "同意", "始める", "yes"]:
-            SessionManager.create_session(user_id)
-            q1 = QUESTIONS[0]
-            reply_text = f"Q{q1['id']}: {q1['text']}\n\n{q1['example']}\n\n（できるだけ具体的にお答えください）"
-        else:
-            reply_text = "「診断開始」と送ると始まります。"
-    else:
-        idx = session["index"]
-        answers = session["answers"]
-        answers.append(text)
-        
-        SessionManager.update_session(user_id, idx + 1, answers)
-        
-        mini = mini_feedback(answers, idx)
-        
-        if len(answers) < len(QUESTIONS):
-            next_q = QUESTIONS[len(answers)]
-            reply_text = f"{mini}\n\n━━━━━━━━━━\n\nQ{next_q['id']}: {next_q['text']}\n\n{next_q['example']}"
-        else:
-            diagnosis = final_diagnosis(answers)
-            reply_text = f"🎯 診断完了！\n\n【あなたの性格診断結果】\n\n{diagnosis}"
-            SessionManager.clear_session(user_id)
+    user_data = user_responses[user_id]
     
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=reply_text)
+    # 診断開始
+    if user_message in ["診断", "start", "開始", "診断開始"] or user_data["current_question"] == 0:
+        start_diagnosis(user_id)
+        return
+    
+    # 診断完了後の処理
+    if user_data["completed"]:
+        reply_message = "診断は既に完了しています。新しい診断を始める場合は「診断開始」と送信してください。"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_message))
+        return
+    
+    # 回答の処理
+    if user_data["current_question"] > 0:
+        process_answer(user_id, user_message, event.reply_token)
+
+def start_diagnosis(user_id):
+    """診断開始"""
+    user_responses[user_id] = {
+        "current_question": 1,
+        "answers": {},
+        "completed": False
+    }
+    
+    welcome_message = """🎯 **AIパーソナル診断へようこそ！**
+
+このシステムでは10の質問で、あなただけの完全個別化された性格分析を行います。
+
+✨ **特徴**
+• 既存診断を超える精密分析
+• あなただけの固有パターンを発見
+• 実生活で活用できる具体的アドバイス
+
+📝 **回答のコツ**
+• 詳しく書くほど精密な分析が可能
+• 具体的なエピソードを含めて
+• 思ったことを自由に表現してください
+
+それでは質問1から始めましょう！"""
+    
+    line_bot_api.push_message(user_id, TextSendMessage(text=welcome_message))
+    
+    # 最初の質問を送信
+    send_question(user_id, 1)
+
+def send_question(user_id, question_num):
+    """質問を送信"""
+    if question_num > 10:
+        return
+    
+    question_data = QUESTIONS[question_num]
+    
+    # 質問文を送信
+    line_bot_api.push_message(
+        user_id, 
+        TextSendMessage(text=question_data["question"])
+    )
+    
+    # 記入例を送信
+    line_bot_api.push_message(
+        user_id, 
+        TextSendMessage(text=question_data["example"])
+    )
+    
+    # 励ましメッセージを送信
+    encouragement = "💪 詳しく教えていただくほど、より精密で個人的な診断が可能になります。遠慮なく、思ったことを自由に表現してください！"
+    line_bot_api.push_message(
+        user_id, 
+        TextSendMessage(text=encouragement)
     )
 
+def process_answer(user_id, answer, reply_token):
+    """回答を処理"""
+    user_data = user_responses[user_id]
+    current_q = user_data["current_question"]
+    
+    # 回答を保存
+    user_data["answers"][current_q] = answer
+    
+    if current_q < 10:
+        # 次の質問へ
+        user_data["current_question"] = current_q + 1
+        
+        # 受け答えメッセージ
+        thanks_message = f"✅ 質問{current_q}の回答ありがとうございます！\n\n続いて質問{current_q + 1}です。"
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=thanks_message))
+        
+        # 次の質問を送信
+        send_question(user_id, current_q + 1)
+    else:
+        # 全質問完了 - 診断実行
+        user_data["completed"] = True
+        
+        completion_message = "🎉 全ての質問にお答えいただき、ありがとうございました！\n\n分析中です...少しお待ちください。"
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=completion_message))
+        
+        # 診断分析実行
+        diagnosis_result = analyze_responses(user_data["answers"])
+        
+        # 結果送信
+        send_diagnosis_result(user_id, diagnosis_result)
+
+def analyze_responses(answers):
+    """革命的AI診断分析"""
+    try:
+        # 回答をテキスト形式に変換
+        responses_text = ""
+        for q_num, answer in answers.items():
+            responses_text += f"質問{q_num}: {answer}\n\n"
+        
+        # 革命的分析プロンプト
+        system_prompt = """あなたは心理学・言語学・認知科学の統合的専門家「Dr. Insight Genesis」です。
+
+【ULTIMATE MISSION】
+10の自由回答から、この人の「心理的DNA」を完全解読せよ。
+既存診断では不可能な、完全個別化された人格分析を実行せよ。
+
+【7層統合分析フレームワーク】
+1. **認知構造**: 思考処理の独自パターン
+2. **感情構造**: 感情の動き方・調整方法
+3. **行動構造**: 対人・問題解決の行動特性
+4. **価値観構造**: 判断基準の深層構造
+5. **自己物語**: アイデンティティの核心
+6. **時間軸構造**: 成長・変化への態度
+7. **他者視点構造**: 自己認知の精度
+
+【言語心理学分析】
+- 語彙選択から見える価値観の重心
+- 文体から読み取る思考の特徴
+- 感情表現から判明する感情処理スタイル
+- 時制使用から見える時間軸思考
+- 抽象度から測定する思考レベル
+
+【対比分析の活用】
+質問9の回答から「自己概念の動態性」を特定し、
+他の回答との整合性で「本質的変化 vs 表面的変化」を判別
+
+【人称変化分析の活用】  
+質問10の回答から「自己認知のズレ」を測定し、
+「過小評価型 vs 過大評価型 vs 適正評価型」を判定
+
+【出力要件】
+- この人だけに当てはまる固有洞察
+- 「なんで私のことそんなに知ってるの？」レベルの的中感
+- 友達に教えたくなる驚きの発見
+- 実生活で即活用できる具体的アドバイス
+
+以下のフォーマットで出力してください：
+
+🎯 **診断完了！**
+
+【あなたの診断結果】
+
+## 🎭 「○○○な○○○」
+
+### 💫 あなたの思考構造
+（認知パターンの個別分析）
+
+### 💝 感情のクセ
+（感情処理の独自パターン）
+
+### 🌟 価値観の核
+（判断基準の深層構造）
+
+### 📖 物語の型
+（アイデンティティの特徴）
+
+### 💪 強みTop3
+1. **○○**: ○○
+2. **○○**: ○○
+3. **○○**: ○○
+
+### ⚠️ 注意点Top3
+1. **○○**: ○○
+2. **○○**: ○○
+3. **○○**: ○○
+
+### 💡 活かし方ガイド
+
+#### 🧩 仕事での活かし方
+（具体的アドバイス）
+
+#### 💞 恋愛での活かし方
+（具体的アドバイス）
+
+#### 🧑‍🤝‍🧑 対人関係での活かし方
+（具体的アドバイス）
+
+### 📋 今週の処方箋
+1. **○○**: ○○
+2. **○○**: ○○
+3. **○○**: ○○
+
+この分析があなたの自己理解と成長のお役に立てれば幸いです。"""
+
+        analysis_prompt = f"""
+{responses_text}
+
+上記の10問の回答を分析し、この人の完全個別化された診断を実行してください。
+"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": analysis_prompt}
+        ]
+
+        # GPT-5-nano使用（コスト最適化）
+        response = client.chat.completions.create(
+            model="gpt-5-nano",  # 革新的モデル
+            messages=messages,
+            max_tokens=2000,
+            temperature=0.7
+        )
+
+        return response.choices[0].message.content
+
+    except Exception as e:
+        print(f"診断分析エラー: {e}")
+        return generate_fallback_diagnosis()
+
+def generate_fallback_diagnosis():
+    """フォールバック診断"""
+    return """🎯 **診断完了！**
+
+【あなたの診断結果】
+
+## 🎭 「思慮深いバランサー」
+
+### 💫 あなたの思考構造
+あなたは物事を多角的に検討し、慎重に判断を下すタイプです。感情と論理のバランスを取りながら、周囲との調和も大切にする思考パターンを持っています。
+
+### 💝 感情のクセ
+感情をため込みがちですが、信頼できる人には素直に表現できます。ストレス時は一人の時間を大切にし、内省を通じて解決策を見つけようとします。
+
+### 🌟 価値観の核
+誠実さと信頼関係を何より重視します。自分らしさを保ちながらも、他者との良好な関係を築くことに価値を見出しています。
+
+### 📖 物語の型
+着実な成長を重ねながら、自分なりのペースで人生を歩んでいます。大きな変化より、継続的な改善を通じて理想に近づこうとしています。
+
+### 💪 強みTop3
+1. **バランス感覚**: 多様な視点を統合する能力
+2. **共感力**: 他者の気持ちを理解し寄り添う力
+3. **継続力**: 地道に努力を積み重ねる力
+
+### ⚠️ 注意点Top3
+1. **完璧主義**: 高すぎる基準で自分を追い込むことがある
+2. **優柔不断**: 慎重すぎて決断が遅れることがある
+3. **自己犠牲**: 他者を優先しすぎて自分を後回しにする傾向
+
+### 💡 活かし方ガイド
+
+#### 🧩 仕事での活かし方
+チーム内の調整役として力を発揮できます。多様な意見をまとめ、建設的な解決策を見つける能力を活かしましょう。
+
+#### 💞 恋愛での活かし方
+相手の気持ちに寄り添える優しさが魅力です。自分の気持ちも素直に表現することで、より深い関係が築けるでしょう。
+
+#### 🧑‍🤝‍🧑 対人関係での活かし方
+聞き上手な特性を活かし、人の相談に乗ることで信頼関係を深めることができます。
+
+### 📋 今週の処方箋
+1. **小さな決断練習**: 日常の小さなことから即断即決を心がける
+2. **感情表現**: 信頼できる人に今の気持ちを言葉で伝える
+3. **自分時間**: 一人でリラックスできる時間を意識的に作る
+
+この分析があなたの自己理解と成長のお役に立てれば幸いです。"""
+
+def send_diagnosis_result(user_id, diagnosis_result):
+    """診断結果を送信"""
+    # 結果が長い場合は分割して送信
+    max_length = 5000
+    
+    if len(diagnosis_result) <= max_length:
+        line_bot_api.push_message(
+            user_id, 
+            TextSendMessage(text=diagnosis_result)
+        )
+    else:
+        # 長文を分割
+        parts = []
+        current_part = ""
+        
+        lines = diagnosis_result.split('\n')
+        for line in lines:
+            if len(current_part + line + '\n') <= max_length:
+                current_part += line + '\n'
+            else:
+                if current_part:
+                    parts.append(current_part)
+                current_part = line + '\n'
+        
+        if current_part:
+            parts.append(current_part)
+        
+        # 分割された結果を順次送信
+        for i, part in enumerate(parts):
+            if i == 0:
+                line_bot_api.push_message(user_id, TextSendMessage(text=part))
+            else:
+                line_bot_api.push_message(user_id, TextSendMessage(text=f"**続き {i+1}**\n\n{part}"))
+    
+    # 完了メッセージとシェア促進
+    share_message = """🎉 **診断完了！**
+
+この診断結果はいかがでしたか？
+当たっていると感じた部分があれば、ぜひ友達にもシェアしてみてください！
+
+🔄 **新しい診断**: 「診断開始」
+📤 **友達に教える**: この診断を友達にもおすすめしてください！
+
+あなたの自己理解と成長のお役に立てれば幸いです ✨"""
+    
+    line_bot_api.push_message(user_id, TextSendMessage(text=share_message))
+
+@app.get("/")
+async def root():
+    return {"message": "AI Personality Diagnosis Bot is running!"}
+
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    uvicorn.run(app, host="0.0.0.0", port=8000)
