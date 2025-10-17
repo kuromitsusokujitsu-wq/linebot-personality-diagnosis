@@ -68,7 +68,7 @@ def handle_message(event):
         if user_data["current_question"] > 0:
             process_answer(user_id, user_message, event.reply_token)
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Error in handle_message: {e}", exc_info=True)
 
 def start_diagnosis(user_id, reply_token):
     try:
@@ -77,7 +77,7 @@ def start_diagnosis(user_id, reply_token):
         line_bot_api.reply_message(reply_token, TextSendMessage(text=welcome))
         send_question(user_id, 1)
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Error in start_diagnosis: {e}", exc_info=True)
 
 def send_question(user_id, question_num):
     try:
@@ -87,7 +87,7 @@ def send_question(user_id, question_num):
         line_bot_api.push_message(user_id, TextSendMessage(text=q["question"]))
         line_bot_api.push_message(user_id, TextSendMessage(text=q["example"]))
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Error in send_question: {e}", exc_info=True)
 
 def process_answer(user_id, answer, reply_token):
     try:
@@ -105,172 +105,185 @@ def process_answer(user_id, answer, reply_token):
             diagnosis = analyze_responses(user_data["answers"])
             send_diagnosis_result(user_id, diagnosis)
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Error in process_answer: {e}", exc_info=True)
 
 def analyze_responses(answers):
-    """GPT-5-mini対応版 - temperatureパラメータなし"""
+    """GPT-5-mini対応版 - 強化デバッグ + フォールバック"""
     try:
         responses_text = "\n\n".join([f"質問{q}: {a}" for q, a in answers.items()])
-        logger.info(f"Analysis start with GPT-5-mini. Length: {len(responses_text)}")
+        logger.info(f"[DEBUG] Analysis start. Input length: {len(responses_text)} chars")
         
-        system_prompt = """あなたは世界最高峰の心理分析専門家です。日本語で回答してください。
+        # シンプル化されたプロンプト（トークン削減）
+        system_prompt = """You are an expert psychologist. Respond in Japanese.
 
-【CRITICAL RULES - 絶対厳守】
+CRITICAL RULES:
+- Write in "あなたは〜する" format (action-oriented)
+- NO abstract analysis phrases like "傾向があります", "示しています"
+- Use concrete daily life scenes (150+ chars per section)
+- Structure: Psychology → Behavior → Emotion
 
-❌ **絶対禁止表現リスト**：
-・「〜という表現からわかるように」
-・「〜を示しています」
-・「〜な傾向があります」
-・「〜と言えるでしょう」
-・「〜と考えられます」
-・「分析すると」
-・「〜が見て取れます」
-・観察者視点の解説文
-
-✅ **必須要件**：
-・すべて「あなたは〜な場面でこう動く」形式で記述
-・日常の具体的な行動シーンで描写
-・読者が「あ、これ自分だ」と思える瞬間描写
-・心理構造 → 行動例 → 感情の裏づけ の3層構造
-
-【記述の黄金パターン】
-各セクションは必ずこの構造：
-1. 心理構造（50-80文字）
-2. → 具体的な日常行動シーン（150-250文字）
-3. 感情・動機の裏づけ（50-80文字）
-
-【ダメな例】
-❌ 「あなたは迅速な意思決定を重視する傾向があります」
-❌ 「この表現から行動力の高さが示されています」
-
-【良い例】
-✅ 「何か問題が起きたとき、あなたはまず深呼吸して全体像を掴もうとする。頭の中で図を描いたり、ノートに書き出したりして『ここが本質だな』と確信した瞬間に動き出す。周りが『もう少し慎重に...』と言っても、あなたの中で確信があれば止まらない。」
-
-【セルフチェック項目】
-出力前に以下を自己確認：
-□ すべての見出しを含んでいるか
-□ 各セクションに「心理→行動→感情」が入っているか
-□ 禁止表現が一切含まれていないか
-□ 各行動シーンが150文字以上あるか
-□ 読者が自分の日常を思い浮かべられる具体性があるか
-
-【出力フォーマット】
+OUTPUT FORMAT:
 🎯 診断完了！
 
-## 🎭 「[日常行動が見える二つ名]」
+## 🎭 「[ニックネーム]」
 
-### 💫 あなたの思考パターン
-[心理構造 50-80文字]
-→ [日常の思考シーン 150-250文字：具体的な場面・行動・心の動きを詳細に]
-[感情的裏づけ 50-80文字]
+### 💫 思考パターン
+[心理構造 50文字]
+→ [日常シーン 150文字]
+[感情 50文字]
 
 ### 💝 感情の動き
-[心理構造 50-80文字]
-→ [日常の感情シーン 150-250文字：どんな場面でどう感じ、どう行動するか]
-[行動への影響 50-80文字]
+[心理構造 50文字]
+→ [日常シーン 150文字]
+[行動への影響 50文字]
 
 ### 🌟 大切にしているもの
-[価値観の核 50-80文字]
-→ [価値観が現れる日常シーン 150-250文字：この価値観がどう行動に出るか]
-[この価値観が生まれた背景 50-80文字]
+[価値観 50文字]
+→ [日常シーン 150文字]
+[背景 50文字]
 
-### 📖 あなたの変化
-[過去との違い 50-80文字]
-→ [変化が見える具体的シーン 150-250文字：以前と今でどう行動が変わったか]
-[今後の方向性 50-80文字]
+### 💪 強みTop3
+1. **[名前]**: [背景 40文字]
+→ [日常シーン 180文字]
 
-### 🎯 周りから見たあなた
-[他者評価 50-80文字]
-→ [友人があなたを語るシーン 120-200文字：友人の視点での具体的描写]
-[自己認識とのギャップ 50-80文字]
+2. **[名前]**: [背景 40文字]
+→ [日常シーン 180文字]
 
-### 💪 強みTop3（行動描写付き）
-1. **[強みの名前]**: [心理的背景 40-60文字]
-　→ [この強みが発揮される具体的な日常シーン 180-280文字：どんな状況で、どう動き、どんな結果を生むか]
+3. **[名前]**: [背景 40文字]
+→ [日常シーン 180文字]
 
-2. **[強みの名前]**: [心理的背景 40-60文字]
-　→ [具体的な日常シーン 180-280文字]
+### ⚠️ 気をつけたいことTop3
+1. **[名前]**: [メカニズム 40文字]
+→ [日常シーン 180文字]
 
-3. **[強みの名前]**: [心理的背景 40-60文字]
-　→ [具体的な日常シーン 180-280文字]
+2. **[名前]**: [メカニズム 40文字]
+→ [日常シーン 180文字]
 
-### ⚠️ 気をつけたいことTop3（行動描写付き）
-1. **[課題の名前]**: [心理的メカニズム 40-60文字]
-　→ [この課題が現れる具体的な日常シーン 180-280文字：どんな場面で、どう困り、どう感じるか]
-
-2. **[課題の名前]**: [心理的メカニズム 40-60文字]
-　→ [具体的な日常シーン 180-280文字]
-
-3. **[課題の名前]**: [心理的メカニズム 40-60文字]
-　→ [具体的な日常シーン 180-280文字]
+3. **[名前]**: [メカニズム 40文字]
+→ [日常シーン 180文字]
 
 ### 💡 活かし方
-
 #### 🧩 仕事で
-[あなたが仕事中にとる具体的な行動シーン 150-250文字：朝の仕事開始から、会議、作業中の様子など]
+[150文字]
 
 #### 💞 恋愛で
-[あなたが恋愛中にとる具体的な行動シーン 150-250文字：デート、コミュニケーション、喧嘩の時など]
+[150文字]
 
 #### 🧑‍🤝‍🧑 人間関係で
-[あなたが対人関係でとる具体的な行動シーン 150-250文字：友人との会話、初対面、困った時など]
-
-### 📋 今週の行動処方箋
-1. **[超具体的行動タイトル]**
-　→ [なぜ効果的か + 実践シーン 120-200文字：いつ、どこで、どうやるか]
-
-2. **[超具体的行動タイトル]**
-　→ [なぜ効果的か + 実践シーン 120-200文字]
-
-3. **[超具体的行動タイトル]**
-　→ [なぜ効果的か + 実践シーン 120-200文字]
-
-この分析が、あなたの日常に新しい気づきをもたらすことを願っています。"""
+[150文字]"""
 
         analysis_prompt = f"""以下の10問の回答を分析してください：
 
 {responses_text}
 
-【最重要指示】
-1. 禁止表現を一切使わず、すべて行動描写で書いてください
-2. 各セクションで「心理構造→行動例→感情の裏づけ」を必ず含めてください
-3. 読者が自分の日常の姿を思い浮かべられる具体的なシーンを描いてください
-4. 文字数要件を厳守してください（行動シーン150文字以上）
-5. この人の回答の言葉選び・エピソードから、この人だけの固有パターンを抽出してください
-
-出力前にセルフチェックを行い、完璧な診断結果を作成してください。"""
+INSTRUCTIONS:
+- 禁止表現を使わず行動描写で書く
+- 各セクションに具体的日常シーンを含める
+- 文字数要件を守る
+- この人固有のパターンを抽出"""
 
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": analysis_prompt}
         ]
 
-        logger.info("Calling OpenAI API with GPT-5-mini (default temperature=1)...")
+        logger.info("[DEBUG] Calling OpenAI API with GPT-5-mini...")
+        
+        try:
+            response = client.chat.completions.create(
+                model="gpt-5-mini",
+                messages=messages,
+                max_completion_tokens=3500  # 4500→3500に削減
+            )
+            
+            logger.info(f"[DEBUG] API call successful. Response type: {type(response)}")
+            
+            # レスポンス内容の詳細確認
+            if not response.choices:
+                logger.error("[ERROR] response.choices is empty")
+                return generate_fallback_diagnosis(answers)
+            
+            message_content = response.choices[0].message.content
+            logger.info(f"[DEBUG] message.content type: {type(message_content)}, value: {message_content[:100] if message_content else 'None'}")
+            
+            if not message_content:
+                logger.error("[ERROR] message.content is None or empty")
+                return generate_fallback_diagnosis(answers)
+            
+            result = message_content.strip()
+            
+            if len(result) < 100:
+                logger.warning(f"[WARNING] Result too short: {len(result)} chars")
+                return generate_fallback_diagnosis(answers)
+            
+            logger.info(f"[SUCCESS] Analysis completed! Length: {len(result)} chars")
+            return result
+            
+        except openai.APIError as api_err:
+            logger.error(f"[ERROR] OpenAI API Error: {api_err}", exc_info=True)
+            return generate_fallback_diagnosis(answers)
+        except Exception as api_ex:
+            logger.error(f"[ERROR] Unexpected API error: {api_ex}", exc_info=True)
+            return generate_fallback_diagnosis(answers)
+
+    except Exception as e:
+        logger.error(f"[CRITICAL ERROR] analyze_responses failed: {e}", exc_info=True)
+        return generate_fallback_diagnosis(answers)
+
+def generate_fallback_diagnosis(answers):
+    """フォールバック診断（GPT-4o-miniで再試行）"""
+    try:
+        logger.info("[FALLBACK] Trying GPT-4o-mini as fallback...")
+        
+        responses_text = "\n\n".join([f"質問{q}: {a}" for q, a in answers.items()])
+        
+        simple_prompt = f"""以下の10問の回答から、この人の性格を日本語で診断してください。
+必ず「あなたは〜する」形式で、具体的な日常行動を描写してください。
+
+{responses_text}
+
+診断結果（1500文字以上で詳しく）："""
+
         response = client.chat.completions.create(
-            model="gpt-5-mini",  # ✅ GPT-5-mini に変更
-            messages=messages,
-            max_completion_tokens=4500
-            # ⚠️ temperature, top_p, presence_penalty, frequency_penalty は削除
-            # GPT-5-mini はデフォルト値 (temperature=1) のみサポート
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": simple_prompt}],
+            max_completion_tokens=2000,
+            temperature=0.8
         )
         
         result = response.choices[0].message.content or ""
         
-        # 簡易的な禁止語チェック（ログ記録のみ）
-        banned_patterns = ["傾向があります", "示しています", "と言えるでしょう", "と考えられます", "分析すると", "が見て取れます"]
-        found_banned = [b for b in banned_patterns if b in result]
-        if found_banned:
-            logger.warning(f"⚠️ 禁止語検出: {found_banned}")
-        
-        logger.info(f"✅ Analysis completed with GPT-5-mini! Length: {len(result)} chars")
-        return result
+        if result and len(result) > 100:
+            logger.info(f"[FALLBACK SUCCESS] GPT-4o-mini diagnosis: {len(result)} chars")
+            return f"🎯 診断完了！\n\n{result}\n\n※ GPT-4o-miniで生成されました"
+        else:
+            logger.error("[FALLBACK FAILED] GPT-4o-mini also returned empty")
+            return generate_emergency_diagnosis()
+            
+    except Exception as fb_err:
+        logger.error(f"[FALLBACK ERROR] {fb_err}", exc_info=True)
+        return generate_emergency_diagnosis()
 
-    except Exception as e:
-        logger.error(f"❌ ERROR: {type(e).__name__}: {str(e)}")
-        return "分析中にエラーが発生しました。もう一度お試しください。"
+def generate_emergency_diagnosis():
+    """緊急時の固定診断メッセージ"""
+    return """🎯 診断システム一時停止中
+
+申し訳ございません。現在診断システムに技術的な問題が発生しています。
+
+📧 サポートに自動通知済み
+🔄 しばらく待ってから「診断開始」で再試行してください
+
+ご不便をおかけして申し訳ございません。"""
 
 def send_diagnosis_result(user_id, diagnosis_result):
     try:
+        logger.info(f"[DEBUG] Sending diagnosis. Length: {len(diagnosis_result)}, Empty: {not diagnosis_result.strip()}")
+        
+        # 空チェック強化
+        if not diagnosis_result or not diagnosis_result.strip():
+            logger.error("[ERROR] diagnosis_result is empty!")
+            diagnosis_result = generate_emergency_diagnosis()
+        
         max_length = 5000
         if len(diagnosis_result) <= max_length:
             line_bot_api.push_message(user_id, TextSendMessage(text=diagnosis_result))
@@ -287,17 +300,20 @@ def send_diagnosis_result(user_id, diagnosis_result):
             if current:
                 parts.append(current)
             
-            for part in parts:
+            for i, part in enumerate(parts):
+                logger.info(f"[DEBUG] Sending part {i+1}/{len(parts)}, length: {len(part)}")
                 line_bot_api.push_message(user_id, TextSendMessage(text=part))
         
         line_bot_api.push_message(user_id, TextSendMessage(text="🎉 診断完了！\n\n🔄 新しい診断: 「診断開始」\n📤 友達にもシェア推奨！"))
-        logger.info(f"Result sent successfully")
+        logger.info(f"[SUCCESS] Result sent successfully")
+    except LineBotApiError as line_err:
+        logger.error(f"[ERROR] LINE API Error: {line_err}", exc_info=True)
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"[ERROR] send_diagnosis_result failed: {e}", exc_info=True)
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "AI Diagnosis Bot Running (GPT-5-mini)"}
+    return {"status": "ok", "message": "AI Diagnosis Bot Running (GPT-5-mini with fallback)"}
 
 @app.get("/health")
 async def health():
