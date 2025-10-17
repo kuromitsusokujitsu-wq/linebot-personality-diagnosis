@@ -108,10 +108,10 @@ def process_answer(user_id, answer, reply_token):
         logger.error(f"Error: {e}")
 
 def analyze_responses(answers):
-    """最適化された診断システム - シンプル＋強力"""
+    """GPT-5-mini対応版 - temperatureパラメータなし"""
     try:
         responses_text = "\n\n".join([f"質問{q}: {a}" for q, a in answers.items()])
-        logger.info(f"Analysis start. Length: {len(responses_text)}")
+        logger.info(f"Analysis start with GPT-5-mini. Length: {len(responses_text)}")
         
         system_prompt = """あなたは世界最高峰の心理分析専門家です。日本語で回答してください。
 
@@ -245,15 +245,13 @@ def analyze_responses(answers):
             {"role": "user", "content": analysis_prompt}
         ]
 
-        logger.info("Calling OpenAI API with optimized prompt...")
+        logger.info("Calling OpenAI API with GPT-5-mini (default temperature=1)...")
         response = client.chat.completions.create(
-            model="gpt-5-mini",
+            model="gpt-5-mini",  # ✅ GPT-5-mini に変更
             messages=messages,
-            max_completion_tokens=4500,  # ✅ 正しいパラメータ
-            temperature=0.82,  # 創造性とコントロールのバランス
-            top_p=0.92,
-            presence_penalty=0.15,  # 繰り返し防止
-            frequency_penalty=0.12  # 多様性向上
+            max_completion_tokens=4500
+            # ⚠️ temperature, top_p, presence_penalty, frequency_penalty は削除
+            # GPT-5-mini はデフォルト値 (temperature=1) のみサポート
         )
         
         result = response.choices[0].message.content or ""
@@ -264,7 +262,7 @@ def analyze_responses(answers):
         if found_banned:
             logger.warning(f"⚠️ 禁止語検出: {found_banned}")
         
-        logger.info(f"✅ Analysis completed! Length: {len(result)} chars")
+        logger.info(f"✅ Analysis completed with GPT-5-mini! Length: {len(result)} chars")
         return result
 
     except Exception as e:
@@ -299,7 +297,7 @@ def send_diagnosis_result(user_id, diagnosis_result):
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "AI Diagnosis Bot Running"}
+    return {"status": "ok", "message": "AI Diagnosis Bot Running (GPT-5-mini)"}
 
 @app.get("/health")
 async def health():
